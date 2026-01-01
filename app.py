@@ -1,76 +1,50 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, jsonify, Response
 import requests
+from flask_cors import CORS
 
 app = Flask(__name__)
+# تفعيل CORS للجميع
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# قائمة بالهيدرز التي يجب عدم تمريرها لتجنب تضارب بروتوكول HTTP
-# (Hop-by-hop headers)
-EXCLUDED_HEADERS = [
-    'content-encoding', 'content-length', 'transfer-encoding', 'connection', 'host'
-]
-
-@app.route('/proxy', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
+@app.route('/proxy', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
 def proxy():
-    # --- 1. التعامل مع طلبات Pre-flight (OPTIONS) ---
-    # المتصفح يرسل هذا الطلب أولاً للتأكد من السماح بالاتصال
-    if request.method == 'OPTIONS':
-        return _build_cors_preflight_response()
-
+    # 1. الحصول على الرابط الهدف
     target_url = request.args.get('url')
+    # 2. الحصول على الكوكيز من الباراميتر (الجديد)
+    custom_cookie = request.args.get('cookie')
+    
     if not target_url:
         return jsonify({'error': 'Missing "url" parameter'}), 400
 
-    # --- 2. تجهيز الهيدرز المرسلة للـ API ---
-    # نأخذ كل الهيدرز من المتصفح (بما فيها الكوكيز) ونستثني الهيدرز الخاصة بالسيرفر
-    headers = {
-        key: value for key, value in request.headers 
-        if key.lower() not in EXCLUDED_HEADERS
-    }
+    # نسخ الهيدرز القادمة من الطلب الأصلي
+    headers = {key: value for (key, value) in request.headers if key != 'Host'}
+
+    # 3. حقن الكوكيز في الهيدر إذا تم تمريرها في الرابط
+    if custom_cookie:
+        # نقوم بإضافة أو استبدال هيدر الكوكيز بالقيمة القادمة من الرابط
+        headers['Cookie'] = custom_cookie
 
     try:
-        # --- 3. إرسال الطلب الفعلي ---
+        # إرسال الطلب إلى الـ API الأصلي
         resp = requests.request(
             method=request.method,
             url=target_url,
             headers=headers,
             data=request.get_data(),
-            cookies=request.cookies, # تمرير الكوكيز بشكل صريح
-            allow_redirects=False,
-            stream=True # مهم جداً لاستقبال البيانات الكبيرة
+            allow_redirects=False
         )
 
-        # --- 4. بناء الاستجابة للمتصفح ---
-        # نقوم بإنشاء كائن Response وننقل إليه المحتوى والـ Status Code
-        response = Response(resp.content, resp.status_code)
+        # تجهيز الهيدرز للرد
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        headers_response = [
+            (name, value) for (name, value) in resp.raw.headers.items()
+            if name.lower() not in excluded_headers
+        ]
 
-        # نقل الهيدرز من الـ API إلى المتصفح (بما فيها Set-Cookie)
-        for name, value in resp.raw.headers.items():
-            if name.lower() not in EXCLUDED_HEADERS:
-                response.headers.add(name, value)
-
-        # --- 5. إضافة هيدرز الـ CORS الضرورية للكوكيز ---
-        return _add_cors_headers(response)
+        return Response(resp.content, resp.status_code, headers_response)
 
     except requests.exceptions.RequestException as e:
         return jsonify({'error': str(e)}), 500
-
-def _build_cors_preflight_response():
-    response = Response()
-    return _add_cors_headers(response)
-
-def _add_cors_headers(response):
-    # للحصول على الكوكيز، يجب ألا نستخدم * في Origin
-    # بدلاً من ذلك، نقرأ الـ Origin من الطلب ونعيده كما هو
-    request_origin = request.headers.get('Origin')
-    
-    if request_origin:
-        response.headers['Access-Control-Allow-Origin'] = request_origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true' # هذا هو المفتاح للكوكيز
-    
-    response.headers['Access-Control-Allow-Headers'] = request.headers.get('Access-Control-Request-Headers', 'Authorization, Content-Type, Cookie, X-Requested-With')
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
-    
-    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
