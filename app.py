@@ -3,7 +3,12 @@ import requests
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    expose_headers=["odoo-cookie"]  # 🔥 هذا هو المفتاح
+)
 
 @app.route('/proxy', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
 def proxy():
@@ -12,7 +17,7 @@ def proxy():
     if not target_url:
         return jsonify({'error': 'Missing "url" parameter'}), 400
 
-    headers = {key: value for (key, value) in request.headers if key.lower() != 'host'}
+    headers = {k: v for k, v in request.headers if k.lower() != 'host'}
 
     try:
         resp = requests.request(
@@ -27,23 +32,19 @@ def proxy():
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
 
         headers_response = []
-        collected_cookies = []
+        cookies_collected = []
 
-        # 🔹 المرور على جميع الهيدرز القادمة من السيرفر الأصلي
         for name, value in resp.raw.headers.items():
             lname = name.lower()
-
             if lname == 'set-cookie':
-                collected_cookies.append(value)
+                cookies_collected.append(value)
                 continue
-
             if lname not in excluded_headers:
                 headers_response.append((name, value))
 
-        # 🔹 دمج كل Set-Cookie وإعادتها باسم جديد
-        if collected_cookies:
+        if cookies_collected:
             headers_response.append(
-                ('odoo-cookie', ', '.join(collected_cookies))
+                ('odoo-cookie', ', '.join(cookies_collected))
             )
 
         return Response(resp.content, resp.status_code, headers_response)
