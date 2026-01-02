@@ -7,17 +7,22 @@ app = Flask(__name__)
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
-    expose_headers=["odoo-cookie"]  # 🔥 هذا هو المفتاح
+    expose_headers=["odoo-cookie"]
 )
 
 @app.route('/proxy', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
 def proxy():
     target_url = request.args.get('url')
+    cookie_param = request.args.get('cookie')  # 🔥 الكوكي القادم من FlutterFlow
 
     if not target_url:
         return jsonify({'error': 'Missing "url" parameter'}), 400
 
     headers = {k: v for k, v in request.headers if k.lower() != 'host'}
+
+    # 🔥 إدخال الكوكي يدويًا في الطلب الرئيسي
+    if cookie_param:
+        headers['Cookie'] = cookie_param
 
     try:
         resp = requests.request(
@@ -25,12 +30,10 @@ def proxy():
             url=target_url,
             headers=headers,
             data=request.get_data(),
-            cookies=request.cookies,
             allow_redirects=False
         )
 
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-
         headers_response = []
         cookies_collected = []
 
@@ -42,6 +45,7 @@ def proxy():
             if lname not in excluded_headers:
                 headers_response.append((name, value))
 
+        # إعادة الكوكي باسم مقروء
         if cookies_collected:
             headers_response.append(
                 ('odoo-cookie', ', '.join(cookies_collected))
